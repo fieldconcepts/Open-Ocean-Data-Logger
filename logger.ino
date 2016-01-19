@@ -1,6 +1,4 @@
-/* A very simple RTC triggered datalogger script. Note that I have replaced the
-  analog pin reads in Tom’s Igoes starter code
-  with DS3231 I2C register reading & the delay has been replaced with sleep & RTC interrupt alarms
+/* A simple data logger than
 */
 #include <SD.h>               // I much prefer SdFat.h by Greiman over the old SD.h library used here
 #include  <SPI.h>
