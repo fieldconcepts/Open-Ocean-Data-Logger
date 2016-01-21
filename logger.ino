@@ -1,5 +1,9 @@
-/* A simple data logger than
+/* A very simple RTC triggered datalogger script. Note that I have replaced the
+  analog pin reads in Tom’s Igoes starter code
+  with DS3231 I2C register reading & the delay has been replaced with sleep & RTC interrupt alarms
 */
+float versionNum = 1.0; // Version Number
+
 #include <SD.h>               // I much prefer SdFat.h by Greiman over the old SD.h library used here
 #include  <SPI.h>
 
@@ -52,7 +56,6 @@ volatile boolean clockInterrupt = false;  //this flag is set to true when the RT
 
 //variables for reading the DS3231 RTC temperature register
 float temp3231C;    //Celcius
-float temp3231F;     //Farenhiet
 byte tMSB = 0;
 byte tLSB = 0;
 
@@ -63,10 +66,10 @@ float TEMP_degC = 0.0;
 uint8_t wholeTemp = 0;
 uint8_t fracTemp = 0;
 
-#ifdef TS_TMP102
+
 int TMP102_ADDRESS = 0x48;  // 72=base address (3 others possible)
 byte errorflag = 0; //used in tmp102 functions... might not be needed after error process is integrated
-#endif
+
 
 
 //indicator LED pins
@@ -78,12 +81,19 @@ int BLUE_PIN = 6;
 
 File myFile;
 char c, fileName[] = "CONFIG.TXT";
+int serialNum;
 int samplingPeriod;
+int setYear;
+int setMonth;
+int setDay;
+int setHour;
+int setMinute;
+
 
 
 //Creating timestamped file name
 
-char filename[] = "00000000.TXT";
+char filename[] = "00000000.TXT"; // Filename must be in 8.3 format
 File nameFile;
 
 //################################################  SETUP  ################################################################
@@ -97,80 +107,83 @@ void setup() {
   delay(3000);
 
 
-  //Temp sensor(s) init
-  //**********************
-
-  initTMP102();
-
-
+  initTMP102(); //Temp sensor(s) init
 
   while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB port only
   }
-  Serial.print("Initializing SD card"); delay(1000); Serial.print("."); delay(1000); Serial.print("."); delay(1000); Serial.print("."); delay(1000);
-  // see if the card is present and can be initialized
+  
+  Serial.print(F("Initializing SD card")); delay(500); Serial.print("."); delay(500); Serial.print("."); delay(500); Serial.print("."); delay(500);
+
   if (!SD.begin(chipSelect)) {
-    Serial.println("Card failed, or not present");
-    // don’t do anything more:
+    Serial.println(F("Card failed, or not present"));
     return;
   }
-  Serial.println(" Card initialized."); delay(1000);
-  Serial.println(" ");
+  Serial.println(F(" Card initialized.")); delay(1000);
+
 
   //Getting time from RTC
 
-  Serial.print("Getting clock time"); delay(1000); Serial.print("."); delay(1000); Serial.print("."); delay(1000); Serial.print(". "); delay(1000);
-
+  Serial.print(F("Getting clock time")); delay(500); Serial.print("."); delay(500); Serial.print("."); delay(500); Serial.print(". "); delay(500);
   DateTime now = RTC.now(); //this reads the time from the RTC
   sprintf(CycleTimeStamp, "%04d/%02d/%02d %02d:%02d", now.year(), now.month(), now.day(), now.hour(), now.minute());
 
   Serial.println(CycleTimeStamp); delay(1000);
-  Serial.println(" ");
 
 
-  //Loading the config settings from the config file pre saved on the SD card.
-  //What's in the CONFIG.TXT: [int],XXXXXXXX.XXX e.g. 10,DATA_SET.TXT      !!!filename must only have 8 charachters.
+
+  //Loading the config settings from the config file pre saved on the SD card. Format of CONFIG.TXT: [serial#],[sampling],[year],[month],[day],[hour],[minute]
 
   myFile = SD.open(fileName);
 
-  Serial.print("Reading config file"); delay(1000); Serial.print("."); delay(1000); Serial.print("."); delay(1000); Serial.print("."); delay(1000);
+  Serial.print(F("Reading config file")); delay(500); Serial.print("."); delay(500); Serial.print("."); delay(500); Serial.print("."); delay(500);
 
   if (myFile) {
-    samplingPeriod = myFile.parseInt(); Serial.print(" Sampling period set to "); Serial.print(samplingPeriod); Serial.println(" minutes"); delay(1000);
-
+    serialNum = myFile.parseInt();
+    samplingPeriod = myFile.parseInt(); Serial.print(F(" Sampling period = ")); Serial.print(samplingPeriod); Serial.println(F(" minutes")); delay(1000);
+    setYear = myFile.parseInt();
+    setMonth = myFile.parseInt();
+    setDay = myFile.parseInt();
+    setHour = myFile.parseInt();
+    setMinute = myFile.parseInt();
+    myFile.read(); //skip past commas
     myFile.close();
   }
-
   else {
-    Serial.println("error opening data file");
+    Serial.println(F("error opening data file"));
   }
+  
+  Serial.print(F("Time from config file: ")); Serial.print(setYear); Serial.print("/"); Serial.print(setMonth); Serial.print("/"); Serial.print(setDay); Serial.print(" "); Serial.print(setHour); Serial.print(":"); Serial.println(setMinute);
 
-  Serial.println(" ");
-
-
+  //  RESET RTC using time/date in parsed from config.txt
+  
+  RTC.adjust(DateTime(setYear, setMonth, setDay, setHour, setMinute, 0)); // Update RTC to the date time configured on SD card
+  delay(100);
+  Serial.println(F("Time and date updated...")); Serial.println(" ");
+  delay(1000);
+  
+  
   //TIMESTAMPED FILENAME CREATION
 
-  Serial.print("Creating data file"); delay(1000); Serial.print("."); delay(1000); Serial.print("."); delay(1000); Serial.print(". "); delay(1000);
+  Serial.print(F("Creating data file")); delay(500); Serial.print("."); delay(500); Serial.print("."); delay(500); Serial.print(". "); delay(500);
   getFileName();
   Serial.println(filename);
-  
-  
-  
-  delay(3000);
-
-
-  // You must already have a plain text file file named ‘datalog.txt’ on the SD already for this to work!
-
+  delay(2000);
 
   //————-print a header to the data file———-
   File nameFile = SD.open(filename, FILE_WRITE);
   if (nameFile) { // if the file is available, write to it:
-    nameFile.println("Timestamp, DS3231 Temp(C), TMP102 Temp (C), Battery Voltage (mV)");
-    //I often print many extra lines of text in file headers, identifying details about the hardware being used, the code version that was running, etc
+    nameFile.print(F("OpenOcean Data Logger Prototype v")); nameFile.println(versionNum);
+    nameFile.print(F("Serial Number: #")); nameFile.println(serialNum);
+    nameFile.println(F("Board Type: ProMini"));
+    nameFile.println(F("Sensors: DS3231, TMP102"));
+    nameFile.print(F("Sampling Interval")); nameFile.println(samplingPeriod);
+    nameFile.println(F(" "));
+    nameFile.println(F("Timestamp, DS3231 Temp(C), TMP102 Temp (C), Battery Voltage (mV)")); 
     nameFile.close();
   }
   else {
-    Serial.print("error opening "); Serial.println(filename);// if the file isn’t open, pop up an error:
+    Serial.print(F("error opening ")); Serial.println(filename);// if the file isn’t open, pop up an error:
   }
 
   pinMode(RED_PIN, OUTPUT); //configure 3 RGB pins as outputs
@@ -179,9 +192,9 @@ void setup() {
   digitalWrite(RED_PIN, LOW);
   digitalWrite(GREEN_PIN, HIGH); // startup with green led lit
   digitalWrite(BLUE_PIN, LOW);
-
-  Serial.println("Logger successfully started..."); delay(100);
-  Serial.println("--------------------------------------------------"); delay(1000);
+  
+  Serial.print(F("Starting data logger")); delay(500); Serial.print("."); delay(500); Serial.print("."); delay(500); Serial.print(". "); delay(500);Serial.println(F("Logger successfully started.")); delay(100);
+  Serial.println(F("--------------------------------------------------")); delay(1000);
 
 } // end of setup
 
@@ -216,17 +229,12 @@ void loop() {
     tMSB = Wire.read();            //2’s complement int portion
     tLSB = Wire.read();             //fraction portion
     temp3231C = ((((short)tMSB << 8) | (short)tLSB) >> 6) / 4.0;  // Allows for readings below freezing: thanks to Coding Badly
-    temp3231F = (temp3231C * 1.8) + 32.0; // To Convert Celcius to Fahrenheit
-
   }
+  
   else {
     temp3231C = 0;
     //if temp3231C contains zero, then you know you had a problem reading the data from the RTC!
   }
-
-
-
-
 
 
   //Read TMP102 sensor
@@ -249,9 +257,13 @@ void loop() {
   String dataString = ""; //this line simply erases the string
   dataString += CycleTimeStamp;
   dataString += ", ";     //puts a comma between the two bits of data
-  dataString = dataString + String(temp3231C) + String(", ") + String(TEMP_degC) + String(", ") + String(Vcc);
-
-
+  //dataString = dataString + String(temp3231C) + String(", ") + String(TEMP_degC) + String(", ") + String(Vcc);
+  dataString += temp3231C;
+  dataString += ", ";
+  dataString += TEMP_degC;
+  dataString += ", ";
+  dataString += Vcc;
+  
 
   Serial.println(dataString);
 
@@ -263,7 +275,7 @@ void loop() {
     nameFile.close();
   }
   else {
-    Serial.print("error opening "); Serial.println(filename); // if the file isn’t open, pop up an error:
+    Serial.print(F("error opening ")); Serial.println(filename); // if the file isn’t open, pop up an error:
   }
   // delay(10000);
   // instead of using the delay we will use RTC interrupted sleeps
@@ -349,9 +361,6 @@ int readExternalVcc()
   avrgVraw = avrgVraw / 3; //avrg of 3 readings
   float volts = (avrgVraw / resistorFactor) * referenceVolts ; // calculate the ratio
   result = (volts * 1000); // conv to millivolts
-
-
-
 
   return result;
 }
@@ -509,6 +518,8 @@ int readTMP102()
 #endif
 
 //################################################  FUNCTIONS   ################################################
+
+// Filename must be in8.3 format.
 
 void getFileName() {
 
